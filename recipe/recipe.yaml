@@ -1,6 +1,9 @@
 context:
   version: "1.14.0"
-  build_number: 1
+  build_number: 2
+
+  # ELF machine token `file` prints for the target; checked by the arch test
+  elf_arch: ${{ "x86-64" if target_platform == "linux-64" else "aarch64" if target_platform == "linux-aarch64" else "PowerPC" if target_platform == "linux-ppc64le" else "RISC-V" if target_platform == "linux-riscv64" else "S/390" if target_platform == "linux-s390x" else "" }}
 
   # ocaml_win-64 ships gcc_* and vs2022_* at the same version/build; name the track.
   c_toolchain: ${{ "" if unix else c_compiler ~ "_*" }}
@@ -53,6 +56,8 @@ requirements:
     - if: build_platform != target_platform and unix
       then:
         - ocaml_${{ build_platform }} ${{ ocaml_compiler_version }}.*
+        # ocaml >=17: the cross compiler activates itself (shims, OCAMLLIB, host OCAMLPATH) and has natdynlink
+        - ocaml_${{ target_platform }}[version="${{ ocaml_compiler_version }}.*", build_number=">=17"]
     # windows cross: the self-contained gcc track needs no vcvars
     - if: build_platform != target_platform and not unix
       then:
@@ -77,6 +82,38 @@ tests:
       files:
         - ${{ library }}lib/ocaml/re/*
         - ${{ library }}doc/re/*
+  # cross lanes test under qemu binfmt, which would also run a build-machine
+  # binary; check the native objects' ELF headers name the target instead
+  - if: linux
+    then:
+      script:
+        # test scripts are not jinja-rendered; hand the token over by env
+        env:
+          ELF_ARCH: ${{ elf_arch }}
+        content:
+          - set -eu
+          - n=0
+          - |
+            for a in $(find "${PREFIX}/lib/ocaml/re" -name '*.a'); do
+              n=$((n + 1))
+              d=$(mktemp -d)
+              (cd "$d" && ar x "$a")
+              out=$(find "$d" -name '*.o' -exec file -L {} +)
+              echo "$out"
+              echo "$out" | grep -q . || { echo "no objects in $a"; exit 1; }
+              echo "$out" | grep -v "${ELF_ARCH}" && { echo "wrong arch in $a"; exit 1; } || true
+            done
+          - '[ "$n" -gt 0 ] || { echo "no .a archive found"; exit 1; }'
+          - |
+            for s in "${PREFIX}"/lib/ocaml/stublibs/dll*re*.so; do
+              [ -e "$s" ] || continue
+              file -L "$s"
+              file -L "$s" | grep -q "${ELF_ARCH}" || { echo "wrong arch in $s"; exit 1; }
+            done
+      requirements:
+        build:
+          - file
+          - binutils
 
 about:
   homepage: https://github.com/ocaml/ocaml-re

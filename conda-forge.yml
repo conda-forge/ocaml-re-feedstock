@@ -15,3 +15,4 @@ provider:
   win_arm64: default
 test: all
 conda_install_tool: pixi
+upload_on_branch: main
